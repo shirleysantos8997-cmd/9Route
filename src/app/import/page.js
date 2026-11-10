@@ -10,6 +10,7 @@ const crcTable = Array.from({ length: 256 }, (_, n) => {
 });
 const encoder = new TextEncoder();
 const formats = new Set(["zip", "rar", "7z", "yft", "ytd", "ydr", "ydd", "ybn", "ymap", "ytyp", "meta", "xml", "obj", "fbx", "gltf", "glb", "png", "jpg", "jpeg", "dds", "tga"]);
+const archiveMimeTypes = new Set(["application/zip", "application/x-zip-compressed", "application/x-compressed", "application/octet-stream", "application/vnd.rar", "application/x-7z-compressed"]);
 
 function crc32(bytes) {
   let crc = 0xffffffff;
@@ -19,7 +20,7 @@ function crc32(bytes) {
 function write16(view, offset, value) { view.setUint16(offset, value, true); }
 function write32(view, offset, value) { view.setUint32(offset, value, true); }
 
-// Browser-native STORE ZIP writer: creates a genuine ZIP without an external service or dependencies.
+// Browser-native STORE ZIP writer. The uploaded source archive is retained as-is inside the output bundle.
 function makeZip(entries) {
   const localParts = [];
   const centralParts = [];
@@ -52,16 +53,13 @@ function makeZip(entries) {
   write32(ev, 16, offset); write16(ev, 20, 0);
   return new Blob([...localParts, ...centralParts, end], { type: "application/zip" });
 }
-
-function slug(value) {
-  return value.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "FarmMod";
-}
-function sizeLabel(bytes) {
-  if (bytes < 1024 * 1024) return `${Math.max(1, Math.round(bytes / 1024))} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-function Icon({ children, className = "" }) {
-  return <span aria-hidden="true" className={`material-symbols-outlined ${className}`}>{children}</span>;
+function slug(value) { return value.trim().replace(/[^a-z0-9]+/gi, "_").replace(/^_+|_+$/g, "").slice(0, 48) || "FarmMod"; }
+function sizeLabel(bytes) { return bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} KB` : `${(bytes / (1024 * 1024)).toFixed(1)} MB`; }
+function Icon({ children, className = "" }) { return <span aria-hidden="true" className={`material-symbols-outlined ${className}`}>{children}</span>; }
+function isAccepted(file) {
+  const ext = file.name.split(".").pop()?.toLowerCase();
+  // Some Windows/browser combinations report ZIPs as application/octet-stream (or no MIME at all).
+  return formats.has(ext) || archiveMimeTypes.has(file.type);
 }
 
 export default function ImportPage() {
@@ -78,16 +76,14 @@ export default function ImportPage() {
   function selectFiles(fileList) {
     const incoming = Array.from(fileList || []);
     if (!incoming.length) return;
-    const invalid = incoming.find((file) => !formats.has(file.name.split(".").pop()?.toLowerCase()));
+    const invalid = incoming.find((file) => !isAccepted(file));
     if (invalid) {
-      setMessage(`${invalid.name}: unsupported format. Add a FiveM resource ZIP, GTA asset, model, or texture file.`);
+      setMessage(`${invalid.name}: unsupported format. Try a .zip FiveM resource, .rar/.7z archive, GTA asset, model, or texture file.`);
       return;
     }
     setFiles((existing) => {
       const next = [...existing];
-      for (const file of incoming) {
-        if (!next.some((item) => item.name === file.name && item.size === file.size)) next.push(file);
-      }
+      for (const file of incoming) if (!next.some((item) => item.name === file.name && item.size === file.size)) next.push(file);
       return next;
     });
     setMessage(""); setDownloadUrl(""); setCompleted(false);
@@ -111,10 +107,10 @@ export default function ImportPage() {
         source: "GTA V / FiveM",
         target: "Farming Simulator 25",
         assetCategory: tab,
-        inputFiles: files.map((file) => ({ name: file.webkitRelativePath || file.name, sizeBytes: file.size })),
-        conversionNotes: "Input assets are preserved. This browser-only prototype does not decode proprietary GTA YFT/YDD/YDR formats or create Giants I3D models. A compatible model conversion, FS25-specific rigging/configuration, and in-game validation are still required.",
+        inputFiles: files.map((file) => ({ name: file.webkitRelativePath || file.name, sizeBytes: file.size, archive: /\\.(zip|rar|7z)$/i.test(file.name) })),
+        conversionNotes: "Uploaded archives are preserved intact in source-files/. This browser-only version does not extract RAR/7z or convert proprietary GTA model formats into Giants I3D. A compatible model conversion, FS25-specific rigging/configuration, and in-game validation are still required.",
       };
-      const readme = `${modName} — FS25 CONVERSION SOURCE BUNDLE\n${"=".repeat(55)}\n\nAsset type: ${tab}\nSource: GTA V / FiveM\nTarget: Farming Simulator 25\n\nCONTENTS\n- source-files/ : uploaded files, preserved in their original format\n- conversion-manifest.json : bundle details and source file list\n\nIMPORTANT — THIS IS NOT A PLAYABLE FS25 MOD\nThis free browser tool organizes your files into a ZIP. It does not convert GTA proprietary model files into Giants I3D, create a working vehicle/character/prop, or install anything into the game. Do not rename this bundle to an FS25 mod and expect it to work.\n\nNEXT STEPS FOR A REAL MOD\n1. Convert/rebuild the model and textures into formats supported by Giants Editor.\n2. Create the required I3D scene, materials, collisions, and asset-specific setup.\n3. For vehicles, configure wheels, lights, animations, physics, and the FS25 vehicle XML.\n4. Create and validate modDesc.xml and test in-game.\n\nUse only source assets you own or have permission to modify and redistribute.\n`;
+      const readme = `${modName} — FS25 CONVERSION SOURCE BUNDLE\n${"=".repeat(55)}\n\nAsset type: ${tab}\nSource: GTA V / FiveM\nTarget: Farming Simulator 25\n\nCONTENTS\n- source-files/ : uploaded files and resource archives, preserved in original format\n- conversion-manifest.json : bundle details and source file list\n\nARCHIVES\nZIP, RAR, and 7z files are accepted and copied into source-files/ intact. They are not extracted by this browser-only tool.\n\nIMPORTANT — THIS IS NOT A PLAYABLE FS25 MOD\nThis free tool organizes your files into a ZIP. It does not convert GTA proprietary model files into Giants I3D or install anything into the game. A real mod still needs model conversion, FS25-specific setup, and testing.\n\nOnly use source assets you own or have permission to modify and redistribute.\n`;
       entries.push({ name: "README-conversion.txt", data: readme });
       entries.push({ name: "conversion-manifest.json", data: JSON.stringify(manifest, null, 2) });
       const blob = makeZip(entries);
@@ -133,35 +129,24 @@ export default function ImportPage() {
         <nav className="game-tabs" aria-label="Asset type">{["Cars", "Players", "Props"].map((item) => <button key={item} className={tab === item ? "active" : ""} onClick={() => setTab(item)}>{item}</button>)}</nav>
         <div className="header-status"><span className="ready-dot" /> LOCAL WORKSPACE <span className="header-menu"><Icon>settings</Icon></span></div>
       </header>
-
       <div className="xv-layout">
         <section className="converter-area">
           <div className="converter-title"><span className="eyebrow">OPEN SOURCE · NO SUBSCRIPTION</span><h1>GTA <span className="arrow">→</span> FARMING SIMULATOR 25</h1><p>Prepare your FiveM assets for a Farming Simulator modding workflow.</p></div>
-          <div className="drop-workspace">
-            <div className="drop-instructions"><div className="upload-icon"><Icon>drive_folder_upload</Icon></div><h2>{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} added` : "Drop to prepare"}</h2><p>Drop a FiveM resource, GTA asset, or model files</p><small>.zip · .yft · .ytd · .ydr · .fbx · .obj · .glb</small><button className="browse-button" onClick={() => inputRef.current?.click()}><Icon>folder_open</Icon> Browse files</button>
-              <input ref={inputRef} className="visually-hidden" type="file" multiple accept=".zip,.rar,.7z,.yft,.ytd,.ydr,.ydd,.ybn,.ymap,.ytyp,.meta,.xml,.obj,.fbx,.gltf,.glb,.png,.jpg,.jpeg,.dds,.tga" onChange={(event) => selectFiles(event.target.files)} />
+          <div className={`drop-workspace ${dragging ? "is-dragging" : ""}`} onDragOver={(event) => { event.preventDefault(); setDragging(true); }} onDragLeave={() => setDragging(false)} onDrop={(event) => { event.preventDefault(); setDragging(false); selectFiles(event.dataTransfer.files); }}>
+            <div className="drop-instructions"><div className="upload-icon"><Icon>drive_folder_upload</Icon></div><h2>{files.length ? `${files.length} file${files.length === 1 ? "" : "s"} added` : "Drop to prepare"}</h2><p>Drop a FiveM resource, GTA asset, or model files</p><small>.zip · .rar · .7z · .yft · .ytd · .fbx · .obj · .glb</small><button className="browse-button" onClick={() => inputRef.current?.click()}><Icon>folder_open</Icon> Browse files</button>
+              <input ref={inputRef} className="visually-hidden" type="file" multiple accept=".zip,.rar,.7z,application/zip,application/x-zip-compressed,application/octet-stream,.yft,.ytd,.ydr,.ydd,.ybn,.ymap,.ytyp,.meta,.xml,.obj,.fbx,.gltf,.glb,.png,.jpg,.jpeg,.dds,.tga" onChange={(event) => { selectFiles(event.currentTarget.files); event.currentTarget.value = ""; }} />
             </div>
-            <div className="queue-area">
-              <div className="queue-heading"><span>INPUT QUEUE</span><span>{files.length} FILES</span></div>
-              {files.length ? <div className="queue-list">{files.map((file, index) => <div className="queue-item" key={`${file.name}-${file.size}-${index}`}><Icon>description</Icon><span><b>{file.webkitRelativePath || file.name}</b><small>{sizeLabel(file.size)}</small></span><button aria-label={`Remove ${file.name}`} onClick={() => { setFiles((current) => current.filter((_, i) => i !== index)); setDownloadUrl(""); setCompleted(false); }}><Icon>close</Icon></button></div>)}</div> : <div className="queue-empty"><Icon>folder_open</Icon><span>Your selected files will appear here</span></div>}
+            <div className="queue-area"><div className="queue-heading"><span>INPUT QUEUE</span><span>{files.length} FILES</span></div>
+              {files.length ? <div className="queue-list">{files.map((file, index) => <div className="queue-item" key={`${file.name}-${file.size}-${index}`}><Icon>{/\.(zip|rar|7z)$/i.test(file.name) ? "folder_zip" : "description"}</Icon><span><b>{file.webkitRelativePath || file.name}</b><small>{sizeLabel(file.size)} · {/\.(zip|rar|7z)$/i.test(file.name) ? "archive accepted" : "source file"}</small></span><button aria-label={`Remove ${file.name}`} onClick={() => { setFiles((current) => current.filter((_, i) => i !== index)); setDownloadUrl(""); setCompleted(false); }}><Icon>close</Icon></button></div>)}</div> : <div className="queue-empty"><Icon>folder_open</Icon><span>Your selected files will appear here</span></div>}
               {message && <div className="queue-error" role="alert"><Icon>error</Icon>{message}</div>}
             </div>
           </div>
           <div className="asset-type-row"><span>ASSET TYPE</span>{["Vehicles", "Trucks", "Props", "Characters"].map((item) => <button key={item} className={`asset-chip ${tab === item ? "active" : ""}`} onClick={() => setTab(item)}>{item}</button>)}</div>
           <div className="prepare-row"><label className="mod-name-label">PACKAGE NAME<input value={name} onChange={(event) => { setName(event.target.value); setDownloadUrl(""); setCompleted(false); }} placeholder="My_Farm_Mod" maxLength={70} /></label><button className="convert-button" disabled={!files.length || processing} onClick={createBundle}><Icon>{processing ? "progress_activity" : "folder_zip"}</Icon>{processing ? "Building ZIP…" : "Build free source ZIP"}<Icon>arrow_forward</Icon></button></div>
-          {completed && downloadUrl && <div className="result-card" role="status"><div className="result-icon"><Icon>check_circle</Icon></div><div><b>Source bundle ready</b><span>ZIP created locally in your browser. This is not a playable FS25 mod.</span></div><a href={downloadUrl} download={`${modName}_FS25_source_bundle.zip`}><Icon>download</Icon> Download ZIP</a></div>}
-          <div className="capability-note"><Icon>info</Icon><span><b>Free and transparent:</b> the ZIP keeps your original files and adds a conversion manifest. It does not yet convert proprietary GTA models to Giants I3D or install mods in-game.</span></div>
+          {completed && downloadUrl && <div className="result-card" role="status"><div className="result-icon"><Icon>check_circle</Icon></div><div><b>Source bundle ready</b><span>Your uploaded files—including ZIP archives—are included intact. This is not a playable FS25 mod.</span></div><a href={downloadUrl} download={`${modName}_FS25_source_bundle.zip`}><Icon>download</Icon> Download ZIP</a></div>}
+          <div className="capability-note"><Icon>info</Icon><span><b>Free and transparent:</b> ZIP/RAR/7z archives are accepted and retained intact in your output bundle. This browser-only version does not unpack archives or convert GTA models to Giants I3D.</span></div>
         </section>
-
-        <aside className="xv-guide">
-          <div className="guide-title"><span>HOW IT WORKS</span><Icon>more_horiz</Icon></div>
-          <ol><li><b>Drop the asset</b><p>Add a resource archive or supported GTA / 3D files you have permission to use.</p></li><li><b>Choose its type</b><p>Pick a vehicle, truck, character, or prop to keep the bundle organized.</p></li><li><b>Build your ZIP</b><p>Download a local source bundle with the originals and a conversion checklist.</p></li></ol>
-          <div className="guide-rule" />
-          <div className="guide-title"><span>WHAT'S IN THE ZIP</span></div>
-          <div className="zip-tree"><div><Icon>folder_zip</Icon><b>{modName}_FS25_source_bundle.zip</b></div><span>├─ source-files/ <small>original uploads</small></span><span>├─ README-conversion.txt <small>next steps</small></span><span>└─ conversion-manifest.json <small>asset info</small></span></div>
-          <div className="guide-warning"><Icon>construction</Icon><p><b>Not playable yet</b>FS25 needs an I3D model, game-specific setup and testing. This free web build creates the organized source ZIP—not automatic model conversion.</p></div>
-          <div className="guide-footer">FILES STAY IN YOUR BROWSER <Icon>lock</Icon></div>
-        </aside>
+        <aside className="xv-guide"><div className="guide-title"><span>HOW IT WORKS</span><Icon>more_horiz</Icon></div><ol><li><b>Drop the asset</b><p>ZIP resource archives are accepted; drag one in or browse to select it.</p></li><li><b>Choose its type</b><p>Pick a vehicle, truck, character, or prop to label the bundle.</p></li><li><b>Build your ZIP</b><p>Download a local source bundle with the originals and a conversion checklist.</p></li></ol><div className="guide-rule" /><div className="guide-title"><span>WHAT'S IN THE ZIP</span></div><div className="zip-tree"><div><Icon>folder_zip</Icon><b>{modName}_FS25_source_bundle.zip</b></div><span>├─ source-files/ <small>originals + archives</small></span><span>├─ README-conversion.txt <small>next steps</small></span><span>└─ conversion-manifest.json <small>asset info</small></span></div><div className="guide-warning"><Icon>construction</Icon><p><b>Not playable yet</b>FS25 needs an I3D model, game-specific setup and testing. This free web build creates an organized source ZIP—not automatic model conversion.</p></div><div className="guide-footer">FILES STAY IN YOUR BROWSER <Icon>lock</Icon></div></aside>
       </div>
     </main>
   );
